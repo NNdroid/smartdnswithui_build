@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 ARG BUILDPLATFORM=linux/arm64
-FROM --platform=${BUILDPLATFORM} ubuntu:22.04
+FROM --platform=${BUILDPLATFORM} debian:trixie
 
 ENV DEBIAN_FRONTEND=noninteractive
 
