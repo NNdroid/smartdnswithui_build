@@ -1,0 +1,92 @@
+name: ARM64 Build
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout This Repo
+        uses: actions/checkout@v4
+
+      # 1. 对比本地文件记录的 SHA 与 远程最新的 SHA
+      - name: Check for Updates
+        id: check_update
+        run: |
+          REMOTE_REPO="https://github.com/pymumu/smartdns"
+          LATEST_SHA=$(git ls-remote $REMOTE_REPO HEAD | awk '{print $1}')
+          
+          # 读取本仓库中记录的最后一次构建 SHA
+          # 如果文件不存在，则设为空
+          LAST_SHA=$(cat last_build_sha 2>/dev/null || echo "none")
+          
+          if [ "$LATEST_SHA" == "$LAST_SHA" ]; then
+            echo "No changes detected. Skipping."
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "New commit found: $LATEST_SHA"
+            echo "LATEST_SHA=$LATEST_SHA" >> $GITHUB_ENV
+            echo "should_build=true" >> $GITHUB_OUTPUT
+          fi
+
+      # 2. 启用 ARM64 模拟器
+      - name: Set up QEMU
+        if: steps.check_update.outputs.should_build == 'true'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build in Docker
+        if: steps.check_update.outputs.should_build == 'true'
+        run: |
+          # 1. 在宿主机生成统一的版本号
+          # 格式示例: 1.2026.03.31-1201
+          G_VER="1.$(date +'%Y.%m.%d-%H%M')"
+          echo "FINAL_VER=$G_VER" >> $GITHUB_ENV
+          
+          # 2. 传入构建参数
+          docker build --platform linux/arm64 \
+            --build-arg LATEST_SHA=${{ env.LATEST_SHA }} \
+            --build-arg VER="$G_VER" \
+            -t smartdns-builder .
+          
+          # 3. 提取产物
+          mkdir -p release_assets
+          docker create --name extractor smartdns-builder
+          docker cp extractor:/output/. ./release_assets/
+          docker rm extractor
+
+      - name: Release to GitHub
+        if: steps.check_update.outputs.should_build == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          # 直接使用刚才生成的 FINAL_VER
+          tag_name: v${{ env.FINAL_VER }}
+          name: SmartDNS ${{ env.FINAL_VER }}
+          body: |
+            ## Automated ARM64 Build
+            - **Source SHA:** `${{ env.LATEST_SHA }}`
+            - **Target:** Linux ARM64
+          files: |
+            release_assets/*.deb
+            release_assets/*.tar.gz
+          overwrite: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 5. 更新本仓库的 SHA 记录文件并提交
+      - name: Update Last Build SHA
+        if: steps.check_update.outputs.should_build == 'true'
+        run: |
+          echo "${{ env.LATEST_SHA }}" > last_build_sha
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add last_build_sha
+          git commit -m "Update last build sha to ${{ env.LATEST_SHA }}"
+          git push
