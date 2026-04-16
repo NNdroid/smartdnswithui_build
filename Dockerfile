@@ -31,11 +31,15 @@ WORKDIR /workspace
 RUN git clone --recursive https://github.com/pymumu/smartdns . && \
     git checkout ${LATEST_SHA} && \
     mkdir -p /output && \
-    # 打包源码
     tar -czf /output/smartdns-src-original.tar.gz . && \
-    # 显式指定 libclang 路径
+    # --- 修复开始 ---
+    # 1. 强制建立软链接，让 bindgen 默认就能找到
+    ln -sf /usr/lib/llvm-*/lib/libclang.so.1 /usr/lib/libclang.so && \
+    # 2. 自动获取实际路径并设置环境变量
     export LIBCLANG_PATH=$(dirname $(find /usr/lib/llvm-* -name libclang.so.1 | head -n 1)) && \
-    echo "Using LIBCLANG_PATH: $LIBCLANG_PATH" && \
-    # 执行编译 (此时 node v24 已在 PATH 中)
+    # 3. 必须使用 export 确保子进程（build-pkg.sh）能看到这个变量
+    export CLANG_PATH=/usr/bin/clang && \
+    # --- 修复结束 ---
+    echo "Current LIBCLANG_PATH: $LIBCLANG_PATH" && \
     ./package/build-pkg.sh --platform linux --arch arm64 --with-ui --outputdir /output --ver "${VER}" && \
     ./package/build-pkg.sh --platform debian --arch arm64 --with-ui --outputdir /output --ver "${VER}"
